@@ -11,7 +11,10 @@ find_package(Threads REQUIRED)
 # и исполняемым файлом, и тестами — чтобы не собирать одни и те же .cpp
 # по два раза и не дублировать список исходников в двух местах.
 add_library(mafia_core
+    src/roles/role_utils.cpp
     src/roles/civilian.cpp
+    src/roles/doctor.cpp
+    src/roles/commissar.cpp
 )
 target_include_directories(mafia_core PUBLIC include)
 target_link_libraries(mafia_core PUBLIC Threads::Threads)
