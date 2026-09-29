@@ -7,9 +7,17 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Threads REQUIRED)
 
+# Библиотека с игровой логикой (роли, GameView и т.д.), переиспользуемая
+# и исполняемым файлом, и тестами — чтобы не собирать одни и те же .cpp
+# по два раза и не дублировать список исходников в двух местах.
+add_library(mafia_core
+    src/roles/civilian.cpp
+)
+target_include_directories(mafia_core PUBLIC include)
+target_link_libraries(mafia_core PUBLIC Threads::Threads)
+
 add_executable(mafia src/main.cpp)
-target_include_directories(mafia PRIVATE include)
-target_link_libraries(mafia PRIVATE Threads::Threads)
+target_link_libraries(mafia PRIVATE mafia_core)
 
 enable_testing()
 add_subdirectory(tests)

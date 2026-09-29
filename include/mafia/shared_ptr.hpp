@@ -2,16 +2,38 @@
 
 #include <atomic>
 #include <compare>
+#include <concepts>
 #include <cstddef>
 #include <utility>
 
 namespace mafia {
+
+namespace detail {
+
+// Не зависит от T, поэтому вынесен из шаблона SharedPtr в отдельный тип:
+// это позволяет SharedPtr<Derived> и SharedPtr<Base> ссылаться на один и тот
+// же по типу control-block (иначе, будучи вложенным в шаблон, control_
+// каждой инстанциации SharedPtr<T> имел бы свой собственный несовместимый
+// тип ControlBlock, и конвертация между ними не скомпилировалась бы).
+struct SharedPtrControlBlock {
+    std::atomic<long> count;
+    explicit SharedPtrControlBlock(long initial) : count(initial) {}
+};
+
+}  // namespace detail
 
 // Собственная упрощённая реализация shared_ptr с атомарным счётчиком ссылок,
 // чтобы её можно было безопасно копировать между игровыми потоками (std::thread).
 template <typename T>
 class SharedPtr {
 public:
+    // Разрешаем SharedPtr<T> заглядывать в приватные поля SharedPtr<U> для
+    // любых U — это нужно конвертирующим конструктору/оператору ниже
+    // (например, SharedPtr<Player> из SharedPtr<Civilian>): без дружбы
+    // между разными инстанциациями шаблона control_/ptr_ были бы недоступны.
+    template <typename U>
+    friend class SharedPtr;
+
     SharedPtr() noexcept = default;
 
     SharedPtr(std::nullptr_t) noexcept {}
@@ -27,6 +49,24 @@ public:
     }
 
     SharedPtr(SharedPtr&& other) noexcept : ptr_(other.ptr_), control_(other.control_) {
+        other.ptr_ = nullptr;
+        other.control_ = nullptr;
+    }
+
+    // Конвертирующие конструкторы: разрешают SharedPtr<Derived> -> SharedPtr<Base>
+    // (например, SharedPtr<Civilian> -> SharedPtr<Player>), ровно там, где это
+    // разрешил бы обычный сырой указатель (Derived* -> Base*). requires не даёт
+    // случайно "сконвертировать" несвязанные типы, скажем SharedPtr<int> в
+    // SharedPtr<double>.
+    template <typename U>
+        requires std::convertible_to<U*, T*>
+    SharedPtr(const SharedPtr<U>& other) noexcept : ptr_(other.ptr_), control_(other.control_) {
+        acquire();
+    }
+
+    template <typename U>
+        requires std::convertible_to<U*, T*>
+    SharedPtr(SharedPtr<U>&& other) noexcept : ptr_(other.ptr_), control_(other.control_) {
         other.ptr_ = nullptr;
         other.control_ = nullptr;
     }
@@ -84,10 +124,7 @@ public:
     std::strong_ordering operator<=>(const SharedPtr& other) const noexcept { return ptr_ <=> other.ptr_; }
 
 private:
-    struct ControlBlock {
-        std::atomic<long> count;
-        explicit ControlBlock(long initial) : count(initial) {}
-    };
+    using ControlBlock = detail::SharedPtrControlBlock;
 
     T* ptr_ = nullptr;
     ControlBlock* control_ = nullptr;
