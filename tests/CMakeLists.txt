@@ -13,3 +13,8 @@ add_executable(test_mafia_maniac test_mafia_maniac.cpp)
 target_link_libraries(test_mafia_maniac PRIVATE mafia_core)
 
 add_test(NAME MafiaManiacTests COMMAND test_mafia_maniac)
+
+add_executable(test_game_master test_game_master.cpp)
+target_link_libraries(test_game_master PRIVATE mafia_core)
+
+add_test(NAME GameMasterTests COMMAND test_game_master)
