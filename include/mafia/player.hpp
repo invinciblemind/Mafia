@@ -37,6 +37,13 @@ public:
     bool is_alive() const noexcept { return alive_; }
     void kill() noexcept { alive_ = false; }  // применяется только GameMaster'ом
 
+    // Управляется ли этот игрок человеком за консолью, а не ботом. По
+    // умолчанию false (бот); main.cpp включает это для ровно одного игрока
+    // в режиме --interactive. Конкретные роли сами решают в act()/vote(),
+    // спрашивать ли консоль вместо случайного выбора — см. mafia/roles/role_utils.hpp.
+    bool is_interactive() const noexcept { return interactive_; }
+    void set_interactive(bool value = true) noexcept { interactive_ = value; }
+
     virtual Role role() const noexcept = 0;
     Team team() const noexcept { return team_of(role()); }
 
@@ -51,6 +58,7 @@ protected:
     PlayerId id_;
     std::string name_;
     bool alive_ = true;
+    bool interactive_ = false;
 };
 
 }  // namespace mafia

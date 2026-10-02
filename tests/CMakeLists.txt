@@ -18,3 +18,8 @@ add_executable(test_game_master test_game_master.cpp)
 target_link_libraries(test_game_master PRIVATE mafia_core)
 
 add_test(NAME GameMasterTests COMMAND test_game_master)
+
+add_executable(test_interactive test_interactive.cpp)
+target_link_libraries(test_interactive PRIVATE mafia_core)
+
+add_test(NAME InteractiveTests COMMAND test_interactive)

@@ -1,8 +1,11 @@
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "mafia/game_master.hpp"
 #include "mafia/role.hpp"
@@ -121,7 +124,7 @@ std::string player_name(const GameMaster& master, PlayerId id) {
     return master.all_players()[id]->name();
 }
 
-void print_setup(const GameMaster& master, const Config& config) {
+void print_setup(const GameMaster& master, const Config& config, std::optional<PlayerId> human) {
     std::cout << "=== Раздача ролей ===\n";
     std::cout << "Игроков: " << master.all_players().size() << "\n";
     if (config.full_log) {
@@ -134,10 +137,11 @@ void print_setup(const GameMaster& master, const Config& config) {
     }
     std::cout << "\n";
 
-    if (config.interactive) {
-        std::cout << "Внимание: --interactive пока только принимается программой — управление "
-                     "конкретным игроком с клавиатуры ещё не подключено, все роли действуют "
-                     "автоматически.\n\n";
+    if (human) {
+        const SharedPtr<Player>& you = master.all_players()[*human];
+        std::cout << "Вы играете за " << you->name() << " (id " << *human << "). Ваша роль: "
+                   << role_label(you->role()) << ".\n"
+                   << "В свой ход Ведущий будет показывать подсказку и список доступных целей по id.\n\n";
     }
 }
 
@@ -233,12 +237,56 @@ void print_result(GameResult result) {
     }
 }
 
+// Итоговый состав группируется по лагерям (мирные, мафия, Маньяк); внутри
+// группы сначала выжившие, затем погибшие, дальше по id.
 void print_final_roster(const GameMaster& master) {
+    std::vector<SharedPtr<Player>> sorted = master.all_players();
+    std::ranges::sort(sorted, [](const SharedPtr<Player>& a, const SharedPtr<Player>& b) {
+        if (a->team() != b->team()) {
+            return a->team() < b->team();
+        }
+        if (a->is_alive() != b->is_alive()) {
+            return a->is_alive();
+        }
+        return a->id() < b->id();
+    });
+
     std::cout << "\nИтоговый состав:\n";
-    for (const auto& player : master.all_players()) {
-        std::cout << "  " << player->name() << " -- " << role_label(player->role())
-                   << (player->is_alive() ? " (жив)" : " (погиб)") << "\n";
+    bool has_group = false;
+    Team current_team = Team::Town;
+    for (const auto& player : sorted) {
+        if (!has_group || player->team() != current_team) {
+            current_team = player->team();
+            has_group = true;
+            switch (current_team) {
+                case Team::Town:
+                    std::cout << "Мирные жители:\n";
+                    break;
+                case Team::Mafia:
+                    std::cout << "Мафия:\n";
+                    break;
+                case Team::Independent:
+                    std::cout << "Одиночки:\n";
+                    break;
+            }
+        }
+        std::cout << "  " << (player->is_alive() ? "[жив]   " : "[погиб] ") << player->name() << " -- "
+                   << role_label(player->role()) << "\n";
     }
+}
+
+// Сообщает человеку о его гибели один раз, сразу после фазы, в которой он
+// выбыл, — иначе у него просто молча перестанут запрашиваться действия.
+void announce_human_death_if_needed(const GameMaster& master, std::optional<PlayerId> human, bool& announced,
+                                    bool during_day) {
+    if (!human || announced || master.all_players()[*human]->is_alive()) {
+        return;
+    }
+    announced = true;
+    std::cout << "!!! Вы погибли ("
+              << (during_day ? "казнены дневным голосованием" : "убиты этой ночью")
+              << "). Роль: " << role_label(master.all_players()[*human]->role())
+              << ". Дальше вы наблюдаете за игрой. !!!\n\n";
 }
 
 }  // namespace
@@ -259,17 +307,35 @@ int main(int argc, char** argv) {
     }
 
     GameMaster master(config->player_count, config->mafia_divisor);
-    print_setup(master, *config);
 
+    std::optional<PlayerId> human;
+    if (config->interactive) {
+        std::mt19937 rng{std::random_device{}()};
+        std::uniform_int_distribution<std::size_t> dist(0, master.all_players().size() - 1);
+        human = static_cast<PlayerId>(dist(rng));
+        master.all_players()[*human]->set_interactive();
+    }
+
+    print_setup(master, *config, human);
+
+    bool human_death_announced = false;
+
+    // День и ночь запускаются раздельно (а не через play_round), чтобы итоги
+    // дня печатались ДО того, как человеку предложат ночной ход.
     while (master.check_winner() == GameResult::InProgress) {
         std::cout << "=== День " << (master.round_number() + 1) << " ===\n";
-        auto round = master.play_round();
-        print_day_report(round.day, master, *config);
+        DayReport day = master.play_day();
+        print_day_report(day, master, *config);
+        announce_human_death_if_needed(master, human, human_death_announced, /*during_day=*/true);
 
-        if (round.night_played) {
-            std::cout << "=== Ночь " << master.round_number() << " ===\n";
-            print_night_report(round.night, master, *config);
+        if (master.check_winner() != GameResult::InProgress) {
+            break;
         }
+
+        std::cout << "=== Ночь " << master.round_number() << " ===\n";
+        NightReport night = master.play_night();
+        print_night_report(night, master, *config);
+        announce_human_death_if_needed(master, human, human_death_announced, /*during_day=*/false);
     }
 
     print_result(master.check_winner());
