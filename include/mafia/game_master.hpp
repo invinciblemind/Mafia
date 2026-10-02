@@ -1,5 +1,6 @@
 #pragma once
 
+#include <utility>
 #include <vector>
 
 #include "mafia/action.hpp"
@@ -21,9 +22,31 @@ struct NightReport {
     PlayerId commissar_shot_target = kNoTarget;
 };
 
-// Ведущий — точка синхронизации игры: раздаёт роли, хранит всех игроков и
-// разрешает ночные действия. Дневное голосование и проверка условий победы
-// добавятся следующим шагом.
+// Итог одного дневного голосования.
+struct DayReport {
+    // Кто за кого голосовал — пригодится файловому логированию (п.3 задания
+    // прямо требует фиксировать "кто голосовал за кого").
+    std::vector<std::pair<PlayerId, PlayerId>> votes;
+    PlayerId executed = kNoTarget;  // kNoTarget, если голосов ни за кого не было
+    bool was_tie = false;           // несколько кандидатов набрали поровну голосов
+};
+
+// Итог одного полного раунда: День и, если игра после него продолжается, Ночь.
+struct RoundReport {
+    DayReport day;
+    NightReport night;
+    bool night_played = false;  // false, если игра уже завершилась днём
+};
+
+enum class GameResult {
+    InProgress,
+    TownWins,
+    MafiaWins,
+    ManiacWins,
+};
+
+// Ведущий — точка синхронизации игры: раздаёт роли, хранит всех игроков,
+// проводит дневное голосование и ночную фазу, проверяет условия победы.
 class GameMaster {
 public:
     // mafia_divisor — это k из формулы floor(N/k), k >= 3. Количество мафии
@@ -43,7 +66,22 @@ public:
 
     int round_number() const noexcept { return round_number_; }
 
+    // Увеличивает round_number(). По правилам День всегда идёт первым в
+    // каждом цикле, поэтому именно здесь, а не в play_night(), стартует
+    // новый номер раунда.
+    DayReport play_day();
+
+    // Использует текущий round_number() не увеличивая его: ночь относится
+    // к тому же раунду, что и предшествующий ей день. Предполагается, что
+    // play_day() для этого раунда уже был вызван.
     NightReport play_night();
+
+    // Удобная обёртка: один полный цикл День -> (Ночь, если игра не
+    // закончилась днём). Ночь пропускается, если play_day() уже определил
+    // победителя.
+    RoundReport play_round();
+
+    GameResult check_winner() const;
 
 private:
     static std::vector<SharedPtr<Player>> assign_roles(int player_count, int mafia_divisor);

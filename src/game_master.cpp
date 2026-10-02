@@ -1,12 +1,14 @@
 #include "mafia/game_master.hpp"
 
 #include <algorithm>
+#include <map>
 #include <numeric>
 #include <random>
 #include <set>
 #include <string>
 
 #include "mafia/game_view.hpp"
+#include "mafia/role.hpp"
 #include "mafia/roles/civilian.hpp"
 #include "mafia/roles/commissar.hpp"
 #include "mafia/roles/doctor.hpp"
@@ -100,8 +102,56 @@ std::vector<SharedPtr<Player>> GameMaster::alive_players() const {
     return alive;
 }
 
-NightReport GameMaster::play_night() {
+DayReport GameMaster::play_day() {
     ++round_number_;
+    GameView view{alive_players(), round_number_};
+
+    DayReport report;
+    std::map<PlayerId, int> tally;
+
+    for (const auto& player : view.alive_players) {
+        PlayerId target = player->vote(view);
+        report.votes.emplace_back(player->id(), target);
+        if (target != kNoTarget) {
+            ++tally[target];
+        }
+    }
+
+    if (!tally.empty()) {
+        int max_votes = 0;
+        for (const auto& [target, count] : tally) {
+            max_votes = std::max(max_votes, count);
+        }
+
+        std::vector<PlayerId> top_candidates;
+        for (const auto& [target, count] : tally) {
+            if (count == max_votes) {
+                top_candidates.push_back(target);
+            }
+        }
+
+        report.was_tie = top_candidates.size() > 1;
+
+        // При ничьей бросаем монетку (один из двух вариантов, явно
+        // допускаемых правилами; второй — "никто не выбывает" — мы не
+        // выбрали, чтобы голосование гарантированно двигало игру вперёд).
+        PlayerId executed =
+            top_candidates.size() == 1
+                ? top_candidates.front()
+                : top_candidates[std::uniform_int_distribution<std::size_t>(
+                      0, top_candidates.size() - 1)(setup_rng())];
+
+        players_[executed]->kill();
+        report.executed = executed;
+    }
+
+    return report;
+}
+
+NightReport GameMaster::play_night() {
+    // round_number_ НЕ увеличиваем здесь: ночь относится к тому же раунду,
+    // что и предшествующий ей день (по правилам день всегда идёт первым;
+    // play_day() уже увеличил счётчик раунда перед вызовом play_night()).
     GameView view{alive_players(), round_number_};
 
     NightReport report;
@@ -157,6 +207,70 @@ NightReport GameMaster::play_night() {
     }
 
     return report;
+}
+
+RoundReport GameMaster::play_round() {
+    RoundReport report;
+    report.day = play_day();
+    if (check_winner() == GameResult::InProgress) {
+        report.night = play_night();
+        report.night_played = true;
+    }
+    return report;
+}
+
+GameResult GameMaster::check_winner() const {
+    int mafia_alive = 0;
+    int maniac_alive = 0;
+    int town_alive = 0;
+
+    for (const auto& player : players_) {
+        if (!player->is_alive()) {
+            continue;
+        }
+        switch (player->team()) {
+            case Team::Mafia:
+                ++mafia_alive;
+                break;
+            case Team::Independent:
+                ++maniac_alive;  // пока единственная independent-роль — Маньяк
+                break;
+            case Team::Town:
+                ++town_alive;
+                break;
+        }
+    }
+
+    if (mafia_alive == 0 && maniac_alive == 0) {
+        return GameResult::TownWins;
+    }
+    // <= 1, а не == 1: Маньяк побеждает и "один на один с мирным", и в
+    // ситуации, когда мирных вообще не осталось (например, мафия ночью
+    // убивает последнего мирного, а Маньяк в ту же ночь убивает последнего
+    // мафиози — тогда town_alive сразу становится 0, а не 1). При == 1 эта
+    // ситуация ошибочно оставляла бы игру в состоянии InProgress навсегда,
+    // потому что действовать после этого уже некому.
+    if (maniac_alive > 0 && mafia_alive == 0 && town_alive <= 1) {
+        return GameResult::ManiacWins;
+    }
+
+    // Трактовка п.5 правил мафии (неоднозначная формулировка про равенство
+    // числа мафии и мирных "один из которых Маньяк"): "не-мафия" в целом —
+    // это town_alive + maniac_alive. При строгом численном преимуществе
+    // мафия побеждает всегда (п.4, первая часть правила). При РАВЕНСТВЕ
+    // мафии и "не-мафии" — побеждает, только если Маньяка уже нет: если он
+    // жив, именно он и "смещает" равенство, из-за чего правило 5 явно
+    // откладывает исход до смерти мафии или Маньяка.
+    int non_mafia_alive = town_alive + maniac_alive;
+    if (mafia_alive > 0) {
+        if (mafia_alive > non_mafia_alive) {
+            return GameResult::MafiaWins;
+        }
+        if (mafia_alive == non_mafia_alive && maniac_alive == 0) {
+            return GameResult::MafiaWins;
+        }
+    }
+    return GameResult::InProgress;
 }
 
 }  // namespace mafia
