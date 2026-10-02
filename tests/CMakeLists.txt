@@ -8,3 +8,8 @@ add_executable(test_player_roles test_player_roles.cpp)
 target_link_libraries(test_player_roles PRIVATE mafia_core)
 
 add_test(NAME PlayerRoleTests COMMAND test_player_roles)
+
+add_executable(test_mafia_maniac test_mafia_maniac.cpp)
+target_link_libraries(test_mafia_maniac PRIVATE mafia_core)
+
+add_test(NAME MafiaManiacTests COMMAND test_mafia_maniac)

@@ -15,6 +15,9 @@ add_library(mafia_core
     src/roles/civilian.cpp
     src/roles/doctor.cpp
     src/roles/commissar.cpp
+    src/roles/mafia_council.cpp
+    src/roles/mafia.cpp
+    src/roles/maniac.cpp
 )
 target_include_directories(mafia_core PUBLIC include)
 target_link_libraries(mafia_core PUBLIC Threads::Threads)
