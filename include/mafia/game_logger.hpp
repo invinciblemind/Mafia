@@ -37,6 +37,7 @@ private:
         int votes_cast = 0;
         int votes_received = 0;
         int votes_against_mafia = 0;
+        int resurrections = 0;
         int death_round = 0;  // 0 — жив
         DeathCause death_cause = DeathCause::None;
     };

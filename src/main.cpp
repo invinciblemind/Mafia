@@ -1,9 +1,11 @@
 #include <algorithm>
 #include <cstdlib>
+#include <iterator>
 #include <filesystem>
 #include <iostream>
 #include <optional>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,6 +13,7 @@
 #include "mafia/game_logger.hpp"
 #include "mafia/game_master.hpp"
 #include "mafia/game_view.hpp"
+#include "mafia/role_config.hpp"
 #include "mafia/roles/mafia.hpp"
 #include "mafia/role.hpp"
 
@@ -30,7 +33,8 @@ namespace {
 
 struct Config {
     int player_count = 0;
-    int mafia_divisor = 3;
+    std::optional<int> mafia_divisor;                    // переопределяет значение из конфигурации ролей
+    std::optional<std::filesystem::path> roles_config;  // YAML с набором ролей
     bool interactive = false;
     bool open_announcements = false;
     bool full_log = false;
@@ -45,12 +49,13 @@ void print_usage(const char* program_name) {
         << "Обязательные параметры:\n"
         << "  --players N             количество игроков, N > 4\n\n"
         << "Необязательные параметры:\n"
-        << "  --interactive           один из игроков управляется человеком\n"
-        << "                          (пока только принимается — реальный ввод ещё не подключён)\n"
+        << "  --interactive           один из игроков (случайный) управляется человеком\n"
+        << "  --roles-config FILE     YAML-файл с набором ролей (по умолчанию: мафия, мирные, доктор,\n"
+        << "                          комиссар, маньяк); примеры лежат в config/\n"
         << "  --open-announcements    Ведущий объявляет полный ролевой статус и детали ночи\n"
         << "                          (по умолчанию — закрытые объявления: только лагерь, без деталей)\n"
         << "  --full-log              выводить подробный внутренний лог раунда (голоса, цели действий)\n"
-        << "  --mafia-divisor K       делитель k в формуле floor(N/k) для числа мафии, k >= 3 (по умолчанию 3)\n"
+        << "  --mafia-divisor K       делитель k в формуле floor(N/k) для числа мафии, k >= 3\n                          (по умолчанию 3 или значение из --roles-config)\n"
         << "  --coroutines            исполнять ходы игроков корутинами в одном потоке вместо нитей\n"
         << "  --log-dir DIR           куда писать файловые логи игры (по умолчанию ./logs)\n"
         << "  --no-file-log           не писать файловые логи\n"
@@ -77,6 +82,12 @@ std::optional<Config> parse_args(int argc, char** argv) {
                 return std::nullopt;
             }
             config.mafia_divisor = std::atoi(argv[++i]);
+        } else if (arg == "--roles-config") {
+            if (i + 1 >= argc) {
+                std::cerr << "--roles-config требует значения\n";
+                return std::nullopt;
+            }
+            config.roles_config = argv[++i];
         } else if (arg == "--interactive") {
             config.interactive = true;
         } else if (arg == "--open-announcements") {
@@ -107,8 +118,8 @@ std::optional<Config> parse_args(int argc, char** argv) {
         std::cerr << "--players должен быть больше 4 (получено " << config.player_count << ")\n";
         return std::nullopt;
     }
-    if (config.mafia_divisor < 3) {
-        std::cerr << "--mafia-divisor должен быть не меньше 3 (получено " << config.mafia_divisor << ")\n";
+    if (config.mafia_divisor && *config.mafia_divisor < 3) {
+        std::cerr << "--mafia-divisor должен быть не меньше 3 (получено " << *config.mafia_divisor << ")\n";
         return std::nullopt;
     }
 
@@ -133,9 +144,28 @@ std::string player_name(const GameMaster& master, PlayerId id) {
     return master.all_players()[id]->name();
 }
 
-void print_setup(const GameMaster& master, const Config& config, std::optional<PlayerId> human) {
+// Какие роли участвуют в партии — это публичная информация, как и их число.
+std::string roles_in_game(const mafia::RoleConfig& roles) {
+    std::string text = "Мафия, Мирный житель";
+    auto add = [&text](bool enabled, Role role) {
+        if (enabled) {
+            text += ", " + role_label(role);
+        }
+    };
+    add(roles.doctor, Role::Doctor);
+    add(roles.commissar, Role::Commissar);
+    add(roles.maniac, Role::Maniac);
+    add(roles.sergeant, Role::Sergeant);
+    add(roles.resuscitator, Role::Resuscitator);
+    add(roles.thief, Role::Thief);
+    return text;
+}
+
+void print_setup(const GameMaster& master, const Config& config, const mafia::RoleConfig& roles,
+                 std::optional<PlayerId> human) {
     std::cout << "=== Раздача ролей ===\n";
     std::cout << "Игроков: " << master.all_players().size() << "\n";
+    std::cout << "Роли в игре: " << roles_in_game(roles) << "\n";
     std::cout << "Ходы игроков исполняются: " << (config.coroutines ? "корутинами (один поток)" : "в отдельных нитях")
               << "\n";
     if (config.full_log) {
@@ -187,6 +217,13 @@ void print_day_report(const DayReport& day, const GameMaster& master, const Conf
 void print_night_report(const NightReport& night, const GameMaster& master, const Config& config) {
     if (config.full_log) {
         std::cout << "Подробности ночи (внутренний лог):\n";
+        if (night.block_target != kNoTarget) {
+            std::cout << "  Вор блокировал: " << player_name(master, night.block_target) << " -> "
+                       << (night.block_effective ? "действие не сработало" : "блокировать было нечего") << "\n";
+        }
+        if (night.resurrected != kNoTarget) {
+            std::cout << "  Реаниматор воскресил: " << player_name(master, night.resurrected) << "\n";
+        }
         if (night.healed != kNoTarget) {
             std::cout << "  Доктор лечил: " << player_name(master, night.healed) << "\n";
         }
@@ -205,7 +242,22 @@ void print_night_report(const NightReport& night, const GameMaster& master, cons
         }
     }
 
-    if (night.killed.empty()) {
+    // Воскрешённый Реаниматором входит в night.killed, но утром не числится
+    // погибшим: смерть была отменена до рассвета. Что это сделал Реаниматор,
+    // при открытых объявлениях говорится вслух, при закрытых — секрет.
+    std::vector<PlayerId> dead_in_morning;
+    std::ranges::copy_if(night.killed, std::back_inserter(dead_in_morning),
+                         [&night](PlayerId id) { return id != night.resurrected; });
+    if (config.open_announcements && night.resurrected != kNoTarget) {
+        const SharedPtr<Player>& returned = master.all_players()[night.resurrected];
+        std::cout << "Реаниматор воскресил " << returned->name() << " -- роль: " << role_label(returned->role())
+                  << ".\n";
+    }
+    if (config.open_announcements && night.block_effective) {
+        std::cout << "Вор заблокировал " << player_name(master, night.block_target) << ": ночное действие не сработало.\n";
+    }
+
+    if (dead_in_morning.empty()) {
         std::cout << "Этой ночью никто не погиб";
         // При открытых объявлениях разрешено называть причину (например,
         // кого спас Доктор). При закрытых — причина отсутствия убийства
@@ -218,7 +270,7 @@ void print_night_report(const NightReport& night, const GameMaster& master, cons
     }
 
     std::cout << "Этой ночью погибли:\n";
-    for (PlayerId id : night.killed) {
+    for (PlayerId id : dead_in_morning) {
         const SharedPtr<Player>& victim = master.all_players()[id];
         std::cout << "  " << victim->name();
         if (config.open_announcements) {
@@ -271,15 +323,20 @@ void print_mafia_team(const GameMaster& master, PlayerId human, const mafia::rol
         if (member == human) {
             std::cout << " (это вы)";
         }
+        Role role = master.all_players()[member]->role();
+        if (role != Role::Mafia) {
+            std::cout << " -- " << role_label(role);
+        }
         if (member == boss) {
             std::cout << " -- Босс банды";
         }
         std::cout << "\n";
     }
-    std::cout << "Ночное убийство совершает только Босс, остальные члены банды в ночь не ходят.\n\n";
+    std::cout << "Ночное убийство озвучивает Босс; остальные обычные члены банды в ночь не ходят, "
+                 "а Вор (если он есть) блокирует способности мирного.\n\n";
 }
 
-// Перед ночью напоминает мафии-человеку, ходит ли он и почему. Если прежний
+// Перед ночью напоминает мафии-человеку, что у него за ход. Если прежний
 // Босс погиб и мандат перешёл к человеку, говорит об этом отдельно.
 void announce_mafia_night(const GameMaster& master, PlayerId human, const mafia::roles::MafiaCouncil& council,
                           PlayerId& previous_boss) {
@@ -292,6 +349,9 @@ void announce_mafia_night(const GameMaster& master, PlayerId human, const mafia:
             std::cout << "[Только для вас] Прежний Босс банды погиб -- теперь Босс вы.\n";
         }
         std::cout << "[Только для вас] Вы -- Босс: этой ночью решение об убийстве за вами.\n";
+    } else if (master.all_players()[human]->role() == Role::Thief) {
+        std::cout << "[Только для вас] Босс банды -- " << player_name(master, boss)
+                  << ", он озвучивает убийство. Ваш ход -- блокировка способностей мирного.\n";
     } else {
         std::cout << "[Только для вас] Босс банды -- " << player_name(master, boss)
                   << ", он озвучивает решение мафии. Вы этой ночью не ходите: банда уже договорилась.\n";
@@ -299,32 +359,98 @@ void announce_mafia_night(const GameMaster& master, PlayerId human, const mafia:
     previous_boss = boss;
 }
 
-// Результат проверки Комиссара приходит ТОЛЬКО ему (через Ведущего), поэтому
-// печатается отдельным приватным сообщением, независимо от --full-log и от
-// режима объявлений. Историю проверок копим, чтобы напоминать её по утрам.
-void report_commissar_private(const NightReport& night, const GameMaster& master, std::optional<PlayerId> human,
-                              std::vector<std::string>& check_history) {
-    if (!human || master.all_players()[*human]->role() != Role::Commissar) {
+std::optional<PlayerId> find_alive_with_role(const GameMaster& master, Role role) {
+    for (const auto& player : master.all_players()) {
+        if (player->is_alive() && player->role() == role) {
+            return player->id();
+        }
+    }
+    return std::nullopt;
+}
+
+// Комиссар и Сержант знают друг друга: об этом им сообщают в начале игры.
+void print_commissar_pair_knowledge(const GameMaster& master, std::optional<PlayerId> human) {
+    if (!human) {
         return;
     }
-    if (night.commissar_check_target != kNoTarget) {
-        std::string line = player_name(master, night.commissar_check_target) + " -- " +
-                           (night.commissar_check_result_mafia ? "МАФИЯ" : "не мафия");
-        std::cout << "[Только для вас] Результат вашей проверки: " << line << ".\n\n";
-        check_history.push_back(line);
+    Role role = master.all_players()[*human]->role();
+    if (role == Role::Commissar) {
+        if (auto sergeant = find_alive_with_role(master, Role::Sergeant)) {
+            std::cout << "[Только для вас] Ваш Сержант -- " << player_name(master, *sergeant)
+                      << ". Он знает, кто вы, видит результаты ваших проверок и заменит вас, если вы погибнете.\n\n";
+        }
+    } else if (role == Role::Sergeant) {
+        if (auto commissar = find_alive_with_role(master, Role::Commissar)) {
+            std::cout << "[Только для вас] Комиссар -- " << player_name(master, *commissar)
+                      << ". Вы будете узнавать результаты его проверок; если он погибнет, вы займёте его место.\n\n";
+        }
     }
-    if (night.commissar_shot_target != kNoTarget) {
-        std::cout << "[Только для вас] Вы стреляли в " << player_name(master, night.commissar_shot_target) << ".\n\n";
+}
+
+// Всё, что Ведущий сообщает человеку приватно по итогам ночи: результаты
+// проверок Комиссара (ему и его Сержанту), провал заблокированного хода,
+// воскрешение, повышение Сержанта. Печатается независимо от --full-log и
+// режима объявлений. Историю проверок копим, чтобы напоминать её по утрам.
+void report_night_private(const NightReport& night, const GameMaster& master, std::optional<PlayerId> human,
+                          std::vector<std::string>& check_history) {
+    if (!human) {
+        return;
     }
+    const SharedPtr<Player>& you = master.all_players()[*human];
+    // Сержант, ставший этой ночью Комиссаром, ночью ещё был Сержантом.
+    Role night_role = (night.sergeant_promoted == *human) ? Role::Sergeant : you->role();
+
+    if (night.block_effective && night.block_target == *human) {
+        std::cout << "[Только для вас] Этой ночью ваше ночное действие не сработало.\n\n";
+    }
+
+    if (night_role == Role::Commissar || (night_role == Role::Sergeant && you->is_alive())) {
+        bool is_commissar = night_role == Role::Commissar;
+        if (night.commissar_check_target != kNoTarget) {
+            std::string line = player_name(master, night.commissar_check_target) + " -- " +
+                               (night.commissar_check_result_mafia ? "МАФИЯ" : "не мафия");
+            std::cout << "[Только для вас] " << (is_commissar ? "Результат вашей проверки: " : "Комиссар проверил: ")
+                      << line << ".\n\n";
+            check_history.push_back(line);
+        }
+        if (night.commissar_shot_target != kNoTarget) {
+            std::cout << "[Только для вас] " << (is_commissar ? "Вы стреляли в " : "Комиссар стрелял в ")
+                      << player_name(master, night.commissar_shot_target) << ".\n\n";
+        }
+    }
+
+    if (night_role == Role::Resuscitator && night.resurrected != kNoTarget) {
+        std::cout << "[Только для вас] Вы воскресили " << player_name(master, night.resurrected) << ".\n\n";
+    }
+}
+
+// Сообщает Сержанту-человеку, что он теперь Комиссар (день или ночь).
+void announce_promotion(PlayerId promoted, std::optional<PlayerId> human,
+                        const std::vector<std::string>& check_history) {
+    if (promoted == kNoTarget || !human || promoted != *human) {
+        return;
+    }
+    std::cout << "[Только для вас] Комиссар погиб -- теперь вы Комиссар: каждую ночь можно проверять или стрелять.\n";
+    if (!check_history.empty()) {
+        std::cout << "Известные вам результаты проверок:\n";
+        for (const std::string& line : check_history) {
+            std::cout << "  " << line << "\n";
+        }
+    }
+    std::cout << "\n";
 }
 
 void remind_commissar_checks(const GameMaster& master, std::optional<PlayerId> human,
                              const std::vector<std::string>& check_history) {
-    if (!human || check_history.empty() || !master.all_players()[*human]->is_alive() ||
-        master.all_players()[*human]->role() != Role::Commissar) {
+    if (!human || check_history.empty() || !master.all_players()[*human]->is_alive()) {
         return;
     }
-    std::cout << "[Только для вас] Ваши прошлые проверки:\n";
+    Role role = master.all_players()[*human]->role();
+    if (role != Role::Commissar && role != Role::Sergeant) {
+        return;
+    }
+    std::cout << "[Только для вас] "
+              << (role == Role::Commissar ? "Ваши прошлые проверки:" : "Результаты проверок Комиссара:") << "\n";
     for (const std::string& line : check_history) {
         std::cout << "  " << line << "\n";
     }
@@ -400,7 +526,30 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    GameMaster master(config->player_count, config->mafia_divisor);
+    mafia::RoleConfig role_config = mafia::default_role_config();
+    if (config->roles_config) {
+        try {
+            role_config = mafia::load_role_config(*config->roles_config);
+        } catch (const mafia::ConfigError& error) {
+            std::cerr << "Ошибка конфигурации ролей: " << error.what() << "\n";
+            return 1;
+        }
+    }
+    if (config->mafia_divisor) {
+        role_config.mafia_divisor = *config->mafia_divisor;
+    }
+    for (const std::string& warning : mafia::role_config_warnings(role_config)) {
+        std::cerr << "Предупреждение: " << warning << "\n";
+    }
+
+    std::optional<GameMaster> master_storage;
+    try {
+        master_storage.emplace(config->player_count, role_config);
+    } catch (const std::invalid_argument& error) {
+        std::cerr << "Ошибка: " << error.what() << "\n";
+        return 1;
+    }
+    GameMaster& master = *master_storage;
     master.set_execution_mode(config->coroutines ? mafia::ExecutionMode::Coroutines : mafia::ExecutionMode::Threads);
 
     std::optional<PlayerId> human;
@@ -411,7 +560,8 @@ int main(int argc, char** argv) {
         master.all_players()[*human]->set_interactive();
     }
 
-    print_setup(master, *config, human);
+    print_setup(master, *config, role_config, human);
+    print_commissar_pair_knowledge(master, human);
 
     const mafia::roles::MafiaCouncil* council = human_council(master, human);
     PlayerId previous_boss = kNoTarget;
@@ -445,6 +595,7 @@ int main(int argc, char** argv) {
         if (logger) {
             logger->log_day(master.round_number(), day);
         }
+        announce_promotion(day.sergeant_promoted, human, commissar_checks);
         announce_human_death_if_needed(master, human, human_death_announced, /*during_day=*/true);
 
         if (master.check_winner() != GameResult::InProgress) {
@@ -456,11 +607,12 @@ int main(int argc, char** argv) {
             announce_mafia_night(master, *human, *council, previous_boss);
         }
         NightReport night = master.play_night();
-        report_commissar_private(night, master, human, commissar_checks);
+        report_night_private(night, master, human, commissar_checks);
         print_night_report(night, master, *config);
         if (logger) {
             logger->log_night(master.round_number(), night);
         }
+        announce_promotion(night.sergeant_promoted, human, commissar_checks);
         announce_human_death_if_needed(master, human, human_death_announced, /*during_day=*/false);
     }
 

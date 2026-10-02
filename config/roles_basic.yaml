@@ -1,0 +1,7 @@
+# Обязательные роли задания: Мафия и Мирный житель есть всегда, их число
+# определяется формулой floor(N / mafia_divisor). Ниже — особые роли.
+mafia_divisor: 3
+roles:
+  - doctor
+  - commissar
+  - maniac

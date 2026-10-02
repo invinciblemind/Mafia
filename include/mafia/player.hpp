@@ -37,6 +37,7 @@ public:
 
     bool is_alive() const noexcept { return alive_; }
     void kill() noexcept { alive_ = false; }  // применяется только GameMaster'ом
+    void revive() noexcept { alive_ = true; }  // воскрешение Реаниматором, тоже только GameMaster
 
     // Управляется ли этот игрок человеком за консолью, а не ботом. По
     // умолчанию false (бот); main.cpp включает это для ровно одного игрока
@@ -54,6 +55,10 @@ public:
     // Ночное действие: конкретный смысл (лечить/проверить/убить) зависит
     // от роли, но сигнатура одна и та же для всех игроков.
     virtual NightAction act(const GameView& view) = 0;
+
+    // Ходит ли игрок на втором этапе ночи — после того, как разрешены остальные
+    // ночные действия и известно, кто погиб (так ходит Реаниматор).
+    virtual bool acts_after_resolution() const noexcept { return false; }
 
     // Корутинные варианты тех же ходов (режим --coroutines). По умолчанию
     // просто оборачивают синхронные vote()/act(): бот решает сразу, без

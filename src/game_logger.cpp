@@ -117,7 +117,7 @@ void GameLogger::log_day(int round, const DayReport& day) {
         out << describe(target) << "\n";
         ++tally[target];
         ++stats_[target].votes_received;
-        if (master_.all_players()[target]->role() == Role::Mafia) {
+        if (master_.all_players()[target]->team() == Team::Mafia) {
             ++stats_[voter].votes_against_mafia;
         }
     }
@@ -139,6 +139,10 @@ void GameLogger::log_day(int round, const DayReport& day) {
         stats_[day.executed].death_round = round;
         stats_[day.executed].death_cause = DeathCause::Executed;
     }
+    if (day.sergeant_promoted != kNoTarget) {
+        out << "Комиссар погиб: Сержант " << master_.all_players()[day.sergeant_promoted]->name()
+            << " становится Комиссаром.\n";
+    }
     out << "\n";
     write(round_file(round), out.str(), /*truncate=*/true);
 }
@@ -146,6 +150,10 @@ void GameLogger::log_day(int round, const DayReport& day) {
 void GameLogger::log_night(int round, const NightReport& night) {
     std::ostringstream out;
     out << "--- Ночь ---\n";
+    if (night.block_target != kNoTarget) {
+        out << "Вор блокировал: " << describe(night.block_target) << " -> "
+            << (night.block_effective ? "действие не сработало" : "блокировать было нечего") << "\n";
+    }
     if (night.healed != kNoTarget) {
         out << "Доктор лечил: " << describe(night.healed) << "\n";
     }
@@ -173,6 +181,16 @@ void GameLogger::log_night(int round, const NightReport& night) {
             stats_[id].death_cause = DeathCause::Killed;
         }
     }
+    if (night.resurrected != kNoTarget) {
+        out << "Реаниматор воскресил: " << describe(night.resurrected) << "\n";
+        stats_[night.resurrected].death_round = 0;
+        stats_[night.resurrected].death_cause = DeathCause::None;
+        ++stats_[night.resurrected].resurrections;
+    }
+    if (night.sergeant_promoted != kNoTarget) {
+        out << "Комиссар погиб: Сержант " << master_.all_players()[night.sergeant_promoted]->name()
+            << " становится Комиссаром.\n";
+    }
     out << "\n";
     write(round_file(round), out.str(), /*truncate=*/false);
 }
@@ -197,6 +215,9 @@ void GameLogger::write_summary(GameResult result) {
         out << "  голосов отдано: " << stats.votes_cast << " (из них против мафии: " << stats.votes_against_mafia
             << ")\n";
         out << "  голосов получено: " << stats.votes_received << "\n";
+        if (stats.resurrections > 0) {
+            out << "  воскрешён Реаниматором раз: " << stats.resurrections << "\n";
+        }
     }
     write(game_dir_ / "summary.txt", out.str(), /*truncate=*/true);
 }

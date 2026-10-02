@@ -7,6 +7,7 @@
 #include <random>
 #include <ranges>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -19,6 +20,9 @@
 #include "mafia/roles/mafia.hpp"
 #include "mafia/roles/mafia_council.hpp"
 #include "mafia/roles/maniac.hpp"
+#include "mafia/roles/resuscitator.hpp"
+#include "mafia/roles/sergeant.hpp"
+#include "mafia/roles/thief.hpp"
 
 namespace mafia {
 
@@ -76,8 +80,21 @@ auto collect_in_parallel(const std::vector<SharedPtr<Player>>& players, Decide d
 
 }  // namespace
 
+namespace {
+
+RoleConfig config_with_divisor(int mafia_divisor) {
+    RoleConfig config;
+    config.mafia_divisor = mafia_divisor;
+    return config;
+}
+
+}  // namespace
+
 GameMaster::GameMaster(int player_count, int mafia_divisor)
-    : GameMaster(assign_roles(player_count, mafia_divisor)) {}
+    : GameMaster(player_count, config_with_divisor(mafia_divisor)) {}
+
+GameMaster::GameMaster(int player_count, const RoleConfig& config)
+    : GameMaster(assign_roles(player_count, config)) {}
 
 GameMaster::GameMaster(std::vector<SharedPtr<Player>> players) {
     std::size_t max_id = 0;
@@ -90,14 +107,22 @@ GameMaster::GameMaster(std::vector<SharedPtr<Player>> players) {
     }
 }
 
-std::vector<SharedPtr<Player>> GameMaster::assign_roles(int player_count, int mafia_divisor) {
-    int mafia_count = std::max(1, player_count / mafia_divisor);
+std::vector<SharedPtr<Player>> GameMaster::assign_roles(int player_count, const RoleConfig& config) {
+    int mafia_count = std::max(1, player_count / config.mafia_divisor);
+    const int special_count = int(config.doctor) + int(config.commissar) + int(config.maniac) +
+                              int(config.sergeant) + int(config.resuscitator);
+    if (mafia_count + special_count > player_count) {
+        throw std::invalid_argument("для " + std::to_string(player_count) + " игроков слишком много ролей: нужно минимум " +
+                                    std::to_string(mafia_count + special_count) + " (мафия: " +
+                                    std::to_string(mafia_count) + ", особых ролей: " + std::to_string(special_count) +
+                                    ")");
+    }
 
-    // Перемешиваем id случайным образом, затем нарезаем список на группы
-    // нужных размеров: первые mafia_count id — Мафия, следующие три —
-    // Доктор/Комиссар/Маньяк по одному, остаток — Мирные жители. Само
-    // перемешивание и есть случайное распределение ролей; нарезка после
-    // него — просто удобный способ разделить список на группы.
+    // Перемешиваем id случайным образом, затем нарезаем список на группы по
+    // порядку: мафия (из них один Вор, если он включён — Вор занимает одно из
+    // мест мафии по формуле, а не добавляется сверх неё), затем каждая
+    // включённая особая роль, остаток — Мирные жители. Само перемешивание и
+    // есть случайное распределение ролей.
     std::vector<PlayerId> ids(static_cast<std::size_t>(player_count));
     std::iota(ids.begin(), ids.end(), PlayerId{0});
     std::shuffle(ids.begin(), ids.end(), setup_rng());
@@ -105,26 +130,44 @@ std::vector<SharedPtr<Player>> GameMaster::assign_roles(int player_count, int ma
     auto name_for = [](PlayerId id) { return "Player" + std::to_string(id); };
 
     std::vector<SharedPtr<Player>> players(static_cast<std::size_t>(player_count));
+    std::size_t cursor = 0;
 
     auto council = make_shared_ptr<roles::MafiaCouncil>();
     for (int i = 0; i < mafia_count; ++i) {
         council->members.push_back(ids[static_cast<std::size_t>(i)]);
     }
-
-    std::size_t cursor = 0;
     for (int i = 0; i < mafia_count; ++i, ++cursor) {
         PlayerId id = ids[cursor];
-        players[id] = make_player<roles::Mafia>(id, name_for(id), council);
+        if (config.thief && i == 0) {
+            council->thieves.push_back(id);
+            players[id] = make_player<roles::Thief>(id, name_for(id), council);
+        } else {
+            players[id] = make_player<roles::Mafia>(id, name_for(id), council);
+        }
     }
-    {
+
+    // Досье Комиссара общее с Сержантом (если оба в игре).
+    auto intel = make_shared_ptr<roles::CommissarIntel>();
+
+    if (config.doctor) {
         PlayerId id = ids[cursor++];
         players[id] = make_player<roles::Doctor>(id, name_for(id));
     }
-    {
+    if (config.commissar) {
         PlayerId id = ids[cursor++];
-        players[id] = make_player<roles::Commissar>(id, name_for(id));
+        intel->commissar_id = id;
+        players[id] = make_player<roles::Commissar>(id, name_for(id), intel);
     }
-    {
+    if (config.sergeant) {
+        PlayerId id = ids[cursor++];
+        intel->sergeant_id = id;
+        players[id] = make_player<roles::Sergeant>(id, name_for(id), intel);
+    }
+    if (config.resuscitator) {
+        PlayerId id = ids[cursor++];
+        players[id] = make_player<roles::Resuscitator>(id, name_for(id));
+    }
+    if (config.maniac) {
         PlayerId id = ids[cursor++];
         players[id] = make_player<roles::Maniac>(id, name_for(id));
     }
@@ -142,6 +185,33 @@ std::vector<SharedPtr<Player>> GameMaster::alive_players() const {
     std::ranges::copy(players_ | std::views::filter([](const SharedPtr<Player>& player) { return player->is_alive(); }),
                       std::back_inserter(alive));
     return alive;
+}
+
+PlayerId GameMaster::promote_sergeant_if_needed() {
+    for (SharedPtr<Player>& slot : players_) {
+        if (!slot->is_alive()) {
+            continue;
+        }
+        auto* sergeant = dynamic_cast<roles::Sergeant*>(slot.get());
+        if (sergeant == nullptr) {
+            continue;
+        }
+        // Копия досье: старый объект Sergeant исчезнет при замене слота.
+        SharedPtr<roles::CommissarIntel> intel = sergeant->intel();
+        if (intel->commissar_id == kNoTarget || players_[intel->commissar_id]->is_alive()) {
+            continue;
+        }
+
+        PlayerId id = slot->id();
+        std::string name = slot->name();
+        bool interactive = slot->is_interactive();
+        intel->commissar_id = id;
+        intel->sergeant_id = kNoTarget;
+        slot = make_player<roles::Commissar>(id, name, intel);
+        slot->set_interactive(interactive);
+        return id;
+    }
+    return kNoTarget;
 }
 
 DayReport GameMaster::play_day() {
@@ -198,6 +268,7 @@ DayReport GameMaster::play_day() {
 
         players_[executed]->kill();
         report.executed = executed;
+        report.sergeant_promoted = promote_sergeant_if_needed();
     }
 
     return report;
@@ -212,21 +283,55 @@ NightReport GameMaster::play_night() {
     NightReport report;
     std::set<PlayerId> kill_targets;
 
-    std::vector<NightAction> actions;
-    if (mode_ == ExecutionMode::Threads) {
-        actions = collect_in_parallel(view.alive_players,
-                                      [&view](const SharedPtr<Player>& player) { return player->act(view); });
-    } else {
-        std::vector<Task<NightAction>> tasks;
-        tasks.reserve(view.alive_players.size());
-        for (const SharedPtr<Player>& player : view.alive_players) {
-            tasks.push_back(player->act_async(view));
+    // Исполнение ночных ходов группы игроков: в нитях или корутинами.
+    auto run_actions = [this](const std::vector<SharedPtr<Player>>& who, const GameView& context) {
+        std::vector<NightAction> result;
+        if (mode_ == ExecutionMode::Threads) {
+            result = collect_in_parallel(who, [&context](const SharedPtr<Player>& player) { return player->act(context); });
+        } else {
+            std::vector<Task<NightAction>> tasks;
+            tasks.reserve(who.size());
+            for (const SharedPtr<Player>& player : who) {
+                tasks.push_back(player->act_async(context));
+            }
+            result = run_all(std::move(tasks), input_);
         }
-        actions = run_all(std::move(tasks), input_);
+        return result;
+    };
+
+    // Ночь в два этапа: сначала ходят все одновременно, кроме тех, кто ходит
+    // последним (Реаниматор) — им нужно знать итоги первого этапа.
+    std::vector<SharedPtr<Player>> first_stage;
+    std::vector<SharedPtr<Player>> last_stage;
+    for (const SharedPtr<Player>& player : view.alive_players) {
+        (player->acts_after_resolution() ? last_stage : first_stage).push_back(player);
     }
 
-    for (std::size_t i = 0; i < view.alive_players.size(); ++i) {
-        const SharedPtr<Player>& player = view.alive_players[i];
+    std::vector<NightAction> actions = run_actions(first_stage, view);
+
+    // Блокировка Вора действует до разрешения остальных ходов: все действия
+    // совершаются одновременно, но у заблокированной особой роли мирного оно
+    // просто не срабатывает. Блокировать мафию, Маньяка и обычных мирных
+    // нечего: у них нет особых способностей мирной стороны.
+    std::set<PlayerId> blocked;
+    for (const NightAction& action : actions) {
+        if (action.type == ActionType::Block && action.target != kNoTarget) {
+            blocked.insert(action.target);
+            report.block_target = action.target;
+        }
+    }
+    auto is_cancelled_by_block = [&blocked](const Player& player, const NightAction& action) {
+        return blocked.contains(player.id()) && player.team() == Team::Town && action.type != ActionType::None;
+    };
+    for (std::size_t i = 0; i < first_stage.size(); ++i) {
+        if (is_cancelled_by_block(*first_stage[i], actions[i])) {
+            actions[i] = NightAction{};
+            report.block_effective = true;
+        }
+    }
+
+    for (std::size_t i = 0; i < first_stage.size(); ++i) {
+        const SharedPtr<Player>& player = first_stage[i];
         const NightAction& action = actions[i];
         switch (action.type) {
             case ActionType::Heal:
@@ -235,9 +340,9 @@ NightReport GameMaster::play_night() {
             case ActionType::Kill:
                 if (action.target != kNoTarget) {
                     kill_targets.insert(action.target);
-                    if (player->role() == Role::Mafia) {
+                    if (player->team() == Team::Mafia) {
                         report.mafia_target = action.target;
-                    } else if (player->role() == Role::Maniac) {
+                    } else if (player->team() == Team::Independent) {
                         report.maniac_target = action.target;
                     }
                 }
@@ -245,11 +350,14 @@ NightReport GameMaster::play_night() {
             case ActionType::Check:
                 report.commissar_check_target = action.target;
                 if (action.target != kNoTarget) {
-                    // Правило: проверка Маньяка показывает его мирным. Это
-                    // получается само собой — сверяем именно role() ==
-                    // Role::Mafia, а не team(); у Маньяка role() == Maniac,
-                    // значит условие ниже для него всегда false.
-                    report.commissar_check_result_mafia = players_[action.target]->role() == Role::Mafia;
+                    // Мафией считается любой игрок лагеря мафии (в том числе Вор);
+                    // Маньяк — Independent, значит для него результат всегда
+                    // "не мафия", как и требуют правила проверки Комиссара.
+                    bool is_mafia = players_[action.target]->team() == Team::Mafia;
+                    report.commissar_check_result_mafia = is_mafia;
+                    if (auto* commissar = dynamic_cast<roles::Commissar*>(player.get())) {
+                        commissar->record_check(action.target, is_mafia);  // досье Комиссара и Сержанта
+                    }
                 }
                 break;
             case ActionType::Shoot:
@@ -258,6 +366,8 @@ NightReport GameMaster::play_night() {
                     kill_targets.insert(action.target);
                 }
                 break;
+            case ActionType::Block:      // уже учтено выше
+            case ActionType::Resurrect:  // Реаниматор ходит на втором этапе
             case ActionType::None:
                 break;
         }
@@ -275,6 +385,39 @@ NightReport GameMaster::play_night() {
         report.killed.push_back(id);
     }
 
+    // Второй этап: Реаниматор ходит последним, когда уже известно, кто
+    // погиб этой ночью, и видит их имена (без ролей). Казнённых голосованием
+    // и погибших прежними ночами среди них нет. Если его самого убили этой
+    // ночью, он всё равно успевает сделать ход (как и остальные, кто ходил
+    // одновременно) и вправе назвать в том числе себя.
+    if (!last_stage.empty()) {
+        GameView last_view{view.alive_players, round_number_, &input_};
+        for (PlayerId id : report.killed) {
+            last_view.killed_tonight.push_back(players_[id]);
+        }
+        std::vector<NightAction> last_actions = run_actions(last_stage, last_view);
+
+        for (std::size_t i = 0; i < last_stage.size(); ++i) {
+            const SharedPtr<Player>& player = last_stage[i];
+            const NightAction& action = last_actions[i];
+            if (is_cancelled_by_block(*player, action)) {
+                report.block_effective = true;  // Вор заблокировал Реаниматора: воскрешения не будет
+                continue;
+            }
+            bool was_killed_tonight = std::ranges::find(report.killed, action.target) != report.killed.end();
+            if (action.type == ActionType::Resurrect && was_killed_tonight && !players_[action.target]->is_alive()) {
+                players_[action.target]->revive();
+                report.resurrected = action.target;
+                if (auto* reviver = dynamic_cast<roles::Resuscitator*>(player.get())) {
+                    reviver->note_revived(action.target);
+                }
+            }
+        }
+    }
+
+    // Замена Комиссара проверяется в самом конце: убитого Комиссара могли
+    // воскресить, и тогда Сержант остаётся Сержантом.
+    report.sergeant_promoted = promote_sergeant_if_needed();
     return report;
 }
 

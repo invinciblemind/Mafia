@@ -6,6 +6,7 @@
 #include "mafia/action.hpp"
 #include "mafia/coroutines.hpp"
 #include "mafia/player.hpp"
+#include "mafia/role_config.hpp"
 #include "mafia/shared_ptr.hpp"
 
 namespace mafia {
@@ -21,6 +22,11 @@ struct NightReport {
     PlayerId commissar_check_target = kNoTarget;
     bool commissar_check_result_mafia = false;   // осмысленно только если target != kNoTarget
     PlayerId commissar_shot_target = kNoTarget;
+
+    PlayerId block_target = kNoTarget;  // кого пытался заблокировать Вор
+    bool block_effective = false;       // блокировка сработала (у цели было ночное действие мирной роли)
+    PlayerId resurrected = kNoTarget;   // кого воскресил Реаниматор (из погибших этой ночью; входит и в killed)
+    PlayerId sergeant_promoted = kNoTarget;  // Сержант, ставший Комиссаром после гибели Комиссара
 };
 
 // Итог одного дневного голосования.
@@ -30,6 +36,7 @@ struct DayReport {
     std::vector<std::pair<PlayerId, PlayerId>> votes;
     PlayerId executed = kNoTarget;  // kNoTarget, если голосов ни за кого не было
     bool was_tie = false;           // несколько кандидатов набрали поровну голосов
+    PlayerId sergeant_promoted = kNoTarget;  // Сержант, ставший Комиссаром после казни Комиссара
 };
 
 // Итог одного полного раунда: День и, если игра после него продолжается, Ночь.
@@ -59,6 +66,10 @@ public:
     // mafia_divisor — это k из формулы floor(N/k), k >= 3. Количество мафии
     // не может быть меньше 1, даже если N/k округляется в 0.
     explicit GameMaster(int player_count, int mafia_divisor = 3);
+
+    // То же, но набор ролей берётся из конфигурации (см. role_config.hpp).
+    // Бросает std::invalid_argument, если игроков слишком мало для выбранных ролей.
+    GameMaster(int player_count, const RoleConfig& config);
 
     // Принимает уже готовый список игроков (роли заданы заранее вызывающим
     // кодом). Нужен в первую очередь тестам: позволяет собрать контролируемый
@@ -98,7 +109,12 @@ public:
     GameResult check_winner() const;
 
 private:
-    static std::vector<SharedPtr<Player>> assign_roles(int player_count, int mafia_divisor);
+    static std::vector<SharedPtr<Player>> assign_roles(int player_count, const RoleConfig& config);
+
+    // Если Комиссар погиб, а Сержант жив, заменяет Сержанта новым объектом
+    // Commissar (то же id/имя/интерактивность, общее досье). Возвращает id
+    // Сержанта или kNoTarget, если замены не было.
+    PlayerId promote_sergeant_if_needed();
 
     std::vector<SharedPtr<Player>> players_;  // индекс вектора == PlayerId
     int round_number_ = 0;

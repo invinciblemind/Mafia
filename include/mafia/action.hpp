@@ -18,6 +18,8 @@ inline constexpr PlayerId kNoTarget = std::numeric_limits<PlayerId>::max();
 //   Commissar -> Check (проверить статус target) или Shoot (застрелить target)
 //   Mafia     -> Kill  (убить target)
 //   Maniac    -> Kill  (убить target)
+//   Thief     -> Block (заблокировать target) или Kill, если он последний в банде
+//   Resuscitator -> Resurrect (воскресить погибшего target)
 //   Civilian  -> None  (нет ночных действий)
 enum class ActionType {
     None,
@@ -25,6 +27,8 @@ enum class ActionType {
     Check,
     Shoot,
     Kill,
+    Block,      // Вор: заблокировать ночное действие особой роли мирного
+    Resurrect,  // Реаниматор: воскресить погибшего игрока
 };
 
 // Решение игрока по итогам ночного хода. Игрок только формирует это решение

@@ -38,3 +38,14 @@ add_executable(test_coroutines test_coroutines.cpp)
 target_link_libraries(test_coroutines PRIVATE mafia_core)
 
 add_test(NAME CoroutineTests COMMAND test_coroutines)
+
+add_executable(test_extra_roles test_extra_roles.cpp)
+target_link_libraries(test_extra_roles PRIVATE mafia_core)
+
+add_test(NAME ExtraRoleTests COMMAND test_extra_roles)
+
+add_executable(test_role_config test_role_config.cpp)
+target_link_libraries(test_role_config PRIVATE mafia_core)
+target_compile_definitions(test_role_config PRIVATE MAFIA_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+add_test(NAME RoleConfigTests COMMAND test_role_config)

@@ -11,6 +11,9 @@ enum class Role {
     Commissar,  // Комиссар
     Doctor,     // Доктор
     Maniac,     // Маньяк
+    Sergeant,      // Сержант: знает Комиссара, при его гибели занимает его место
+    Resuscitator,  // Реаниматор: воскрешает погибших
+    Thief,         // Вор: мафиози, блокирует особую роль мирного
 };
 
 // Команда, за победу которой играет роль. Используется для проверки условий
@@ -26,12 +29,15 @@ enum class Team {
 constexpr Team team_of(Role role) noexcept {
     switch (role) {
         case Role::Mafia:
+        case Role::Thief:
             return Team::Mafia;
         case Role::Maniac:
             return Team::Independent;
         case Role::Civilian:
         case Role::Commissar:
         case Role::Doctor:
+        case Role::Sergeant:
+        case Role::Resuscitator:
             return Team::Town;
     }
     return Team::Town;
@@ -40,7 +46,7 @@ constexpr Team team_of(Role role) noexcept {
 // Есть ли у роли ночное действие. Нужна концепту NightActivePlayer, поэтому
 // constexpr: решение принимается при компиляции по Role, а не по объекту.
 constexpr bool acts_at_night(Role role) noexcept {
-    return role != Role::Civilian;
+    return role != Role::Civilian && role != Role::Sergeant;
 }
 
 // Название роли для вывода игроку и для файловых логов.
@@ -56,6 +62,12 @@ constexpr std::string_view role_name(Role role) noexcept {
             return "Доктор";
         case Role::Maniac:
             return "Маньяк";
+        case Role::Sergeant:
+            return "Сержант";
+        case Role::Resuscitator:
+            return "Реаниматор";
+        case Role::Thief:
+            return "Вор";
     }
     return "?";
 }

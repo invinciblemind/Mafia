@@ -5,6 +5,9 @@
 #include "mafia/roles/doctor.hpp"
 #include "mafia/roles/mafia.hpp"
 #include "mafia/roles/maniac.hpp"
+#include "mafia/roles/resuscitator.hpp"
+#include "mafia/roles/sergeant.hpp"
+#include "mafia/roles/thief.hpp"
 
 #include <iostream>
 
@@ -14,6 +17,9 @@ using mafia::roles::Commissar;
 using mafia::roles::Doctor;
 using mafia::roles::Mafia;
 using mafia::roles::Maniac;
+using mafia::roles::Resuscitator;
+using mafia::roles::Sergeant;
+using mafia::roles::Thief;
 
 namespace {
 
@@ -47,6 +53,13 @@ static_assert(PlayerLike<Commissar>);
 static_assert(PlayerLike<Mafia>);
 static_assert(PlayerLike<Maniac>);
 
+// Дополнительные роли (п.5).
+static_assert(PlayerLike<Sergeant> && PlayerLike<Resuscitator> && PlayerLike<Thief>);
+static_assert(TownPlayer<Sergeant> && TownPlayer<Resuscitator>);
+static_assert(MafiaPlayer<Thief> && !TownPlayer<Thief>);
+static_assert(NightActivePlayer<Resuscitator> && NightActivePlayer<Thief>);
+static_assert(!NightActivePlayer<Sergeant>);  // у Сержанта нет ночного хода
+
 // Посторонние типы — нет.
 static_assert(!PlayerLike<int>);
 static_assert(!PlayerLike<NotAPlayer>);
@@ -71,6 +84,8 @@ concept CanTakeNightTurn = requires(T& player, const GameView& view) { take_nigh
 static_assert(CanTakeNightTurn<Doctor> && CanTakeNightTurn<Commissar>);
 static_assert(CanTakeNightTurn<Mafia> && CanTakeNightTurn<Maniac>);
 static_assert(!CanTakeNightTurn<Civilian>);
+static_assert(CanTakeNightTurn<Thief> && CanTakeNightTurn<Resuscitator>);
+static_assert(!CanTakeNightTurn<Sergeant>);
 
 int main() {
     // Среда выполнения: фабрика и ночной ход действительно работают.

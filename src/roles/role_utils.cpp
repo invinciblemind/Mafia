@@ -39,10 +39,14 @@ const SharedPtr<Player>& find_in_view(const GameView& view, PlayerId id) {
             return player;
         }
     }
-    // Не должно происходить: id в candidates всегда взят из view.alive_players.
+    for (const auto& player : view.killed_tonight) {
+        if (player->id() == id) {
+            return player;
+        }
+    }
+    // Не должно происходить: id в candidates всегда взят из этих списков.
     return view.alive_players.front();
 }
-
 
 std::string trim(const std::string& text) {
     const char* spaces = " \t\r\n";
@@ -66,8 +70,7 @@ std::optional<long long> parse_integer(const std::string& text) {
 
 }  // namespace
 
-PlayerId pick_random_target(const GameView& view, const std::vector<PlayerId>& exclude) {
-    std::vector<PlayerId> candidates = gather_candidates(view, exclude);
+PlayerId pick_random_of(const std::vector<PlayerId>& candidates) {
     if (candidates.empty()) {
         return kNoTarget;
     }
@@ -75,9 +78,18 @@ PlayerId pick_random_target(const GameView& view, const std::vector<PlayerId>& e
     return candidates[dist(rng())];
 }
 
+PlayerId pick_random_target(const GameView& view, const std::vector<PlayerId>& exclude) {
+    return pick_random_of(gather_candidates(view, exclude));
+}
+
 Task<PlayerId> prompt_for_target_async(const Player& actor, const GameView& view, std::vector<PlayerId> exclude,
-                                       std::string prompt) {
-    std::vector<PlayerId> candidates = gather_candidates(view, exclude);
+                                       std::string prompt, bool allow_skip) {
+    co_return co_await prompt_from_candidates_async(actor, view, gather_candidates(view, exclude), std::move(prompt),
+                                                    allow_skip);
+}
+
+Task<PlayerId> prompt_from_candidates_async(const Player& actor, const GameView& view,
+                                            std::vector<PlayerId> candidates, std::string prompt, bool allow_skip) {
     if (candidates.empty()) {
         co_return kNoTarget;
     }
@@ -89,6 +101,9 @@ Task<PlayerId> prompt_for_target_async(const Player& actor, const GameView& view
     for (PlayerId id : candidates) {
         out << "  " << id << ": " << find_in_view(view, id)->name() << "\n";
     }
+    if (allow_skip) {
+        out << "  -: никого (пропустить ход)\n";
+    }
 
     while (true) {
         out << "Введите id игрока: ";
@@ -98,9 +113,16 @@ Task<PlayerId> prompt_for_target_async(const Player& actor, const GameView& view
         std::optional<std::string> line = co_await input.read_line();
         if (!line) {
             // Поток ввода исчерпан: повторное чтение вернуло бы EOF мгновенно, и
-            // цикл превратился бы в busy-loop. Берём первого кандидата и выходим.
+            // цикл превратился бы в busy-loop. Выходим со значением по умолчанию.
+            if (allow_skip) {
+                out << "Ввод недоступен — ход пропущен.\n";
+                co_return kNoTarget;
+            }
             out << "Ввод недоступен — выбран первый доступный игрок по умолчанию.\n";
             co_return candidates.front();
+        }
+        if (allow_skip && trim(*line) == "-") {
+            co_return kNoTarget;
         }
 
         std::optional<long long> number = parse_integer(*line);

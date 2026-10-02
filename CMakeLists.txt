@@ -20,6 +20,11 @@ add_library(mafia_core
     src/roles/mafia_council.cpp
     src/roles/mafia.cpp
     src/roles/maniac.cpp
+    src/roles/commissar_intel.cpp
+    src/roles/sergeant.cpp
+    src/roles/resuscitator.cpp
+    src/roles/thief.cpp
+    src/role_config.cpp
 )
 target_include_directories(mafia_core PUBLIC include)
 target_link_libraries(mafia_core PUBLIC Threads::Threads)
