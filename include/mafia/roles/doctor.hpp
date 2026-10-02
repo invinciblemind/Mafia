@@ -17,6 +17,11 @@ public:
     PlayerId vote(const GameView& view) override;
     NightAction act(const GameView& view) override;
 
+    // Корутинные варианты: у интерактивного игрока приостанавливаются на вводе,
+    // у ботов просто возвращают результат синхронных vote()/act().
+    Task<PlayerId> vote_async(const GameView& view) override;
+    Task<NightAction> act_async(const GameView& view) override;
+
 private:
     // Кого лечил прошлой ночью — этого же игрока лечить снова нельзя
     // (правило 2 для Доктора). kNoTarget в первую ночь означает "ограничения

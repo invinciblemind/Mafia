@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "mafia/action.hpp"
+#include "mafia/coroutines.hpp"
 #include "mafia/player.hpp"
 #include "mafia/shared_ptr.hpp"
 
@@ -45,6 +46,12 @@ enum class GameResult {
     ManiacWins,
 };
 
+// Чем Ведущий исполняет ходы игроков внутри одной фазы.
+enum class ExecutionMode {
+    Threads,     // по std::thread на игрока (базовый вариант, п.2)
+    Coroutines,  // кооперативные корутины в одном потоке (п.4)
+};
+
 // Ведущий — точка синхронизации игры: раздаёт роли, хранит всех игроков,
 // проводит дневное голосование и ночную фазу, проверяет условия победы.
 class GameMaster {
@@ -65,6 +72,13 @@ public:
     std::vector<SharedPtr<Player>> alive_players() const;
 
     int round_number() const noexcept { return round_number_; }
+
+    void set_execution_mode(ExecutionMode mode) noexcept { mode_ = mode; }
+    ExecutionMode execution_mode() const noexcept { return mode_; }
+
+    // Канал консольного ввода/вывода для игроков-людей (по умолчанию
+    // std::cin/std::cout). Тесты подменяют потоки через set_streams().
+    InputBroker& input() noexcept { return input_; }
 
     // Увеличивает round_number(). По правилам День всегда идёт первым в
     // каждом цикле, поэтому именно здесь, а не в play_night(), стартует
@@ -88,6 +102,8 @@ private:
 
     std::vector<SharedPtr<Player>> players_;  // индекс вектора == PlayerId
     int round_number_ = 0;
+    ExecutionMode mode_ = ExecutionMode::Threads;
+    InputBroker input_;
 };
 
 }  // namespace mafia

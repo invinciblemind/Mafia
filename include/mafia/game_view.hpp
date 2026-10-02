@@ -7,6 +7,8 @@
 
 namespace mafia {
 
+class InputBroker;  // полное определение в coroutines.hpp
+
 // Read-only снимок игры, который Ведущий передаёт игроку в момент его хода.
 // Игрок не имеет прямого доступа к GameMaster или к другим игрокам напрямую —
 // он видит только то, что разрешено содержимым GameView, и возвращает своё
@@ -18,6 +20,10 @@ namespace mafia {
 struct GameView {
     std::vector<SharedPtr<Player>> alive_players;
     int round_number = 0;
+
+    // Канал связи игрока-человека с консолью через Ведущего. Боты им не
+    // пользуются; nullptr допустим, пока в игре нет интерактивных игроков.
+    InputBroker* input = nullptr;
 };
 
 }  // namespace mafia

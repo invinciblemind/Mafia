@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "mafia/action.hpp"
+#include "mafia/coroutines.hpp"
 #include "mafia/role.hpp"
 
 namespace mafia {
@@ -53,6 +54,13 @@ public:
     // Ночное действие: конкретный смысл (лечить/проверить/убить) зависит
     // от роли, но сигнатура одна и та же для всех игроков.
     virtual NightAction act(const GameView& view) = 0;
+
+    // Корутинные варианты тех же ходов (режим --coroutines). По умолчанию
+    // просто оборачивают синхронные vote()/act(): бот решает сразу, без
+    // ожидания. Роли переопределяют их, чтобы интерактивный игрок мог
+    // приостановиться на вводе (co_await), не блокируя остальных.
+    virtual Task<PlayerId> vote_async(const GameView& view) { co_return vote(view); }
+    virtual Task<NightAction> act_async(const GameView& view) { co_return act(view); }
 
 protected:
     PlayerId id_;

@@ -18,6 +18,8 @@ template <typename T>
 concept PlayerLike = std::derived_from<T, Player> && requires(T& player, const GameView& view) {
     { player.act(view) } -> std::same_as<NightAction>;
     { player.vote(view) } -> std::same_as<PlayerId>;
+    { player.act_async(view) } -> std::same_as<Task<NightAction>>;
+    { player.vote_async(view) } -> std::same_as<Task<PlayerId>>;
     { player.role() } -> std::same_as<Role>;
     { player.is_alive() } -> std::convertible_to<bool>;
 };

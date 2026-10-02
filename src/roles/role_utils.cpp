@@ -1,8 +1,11 @@
 #include "mafia/roles/role_utils.hpp"
 
 #include <algorithm>
-#include <limits>
+#include <charconv>
+#include <iterator>
+#include <optional>
 #include <random>
+#include <ranges>
 #include <string>
 
 namespace mafia::roles::detail {
@@ -19,14 +22,14 @@ std::mt19937& rng() {
 }
 
 std::vector<PlayerId> gather_candidates(const GameView& view, const std::vector<PlayerId>& exclude) {
+    auto not_excluded = [&exclude](const SharedPtr<Player>& player) {
+        return std::ranges::find(exclude, player->id()) == exclude.end();
+    };
     std::vector<PlayerId> candidates;
     candidates.reserve(view.alive_players.size());
-    for (const auto& player : view.alive_players) {
-        bool is_excluded = std::find(exclude.begin(), exclude.end(), player->id()) != exclude.end();
-        if (!is_excluded) {
-            candidates.push_back(player->id());
-        }
-    }
+    std::ranges::copy(view.alive_players | std::views::filter(not_excluded) |
+                          std::views::transform([](const SharedPtr<Player>& player) { return player->id(); }),
+                      std::back_inserter(candidates));
     return candidates;
 }
 
@@ -40,6 +43,27 @@ const SharedPtr<Player>& find_in_view(const GameView& view, PlayerId id) {
     return view.alive_players.front();
 }
 
+
+std::string trim(const std::string& text) {
+    const char* spaces = " \t\r\n";
+    std::size_t first = text.find_first_not_of(spaces);
+    if (first == std::string::npos) {
+        return {};
+    }
+    std::size_t last = text.find_last_not_of(spaces);
+    return text.substr(first, last - first + 1);
+}
+
+std::optional<long long> parse_integer(const std::string& text) {
+    std::string trimmed = trim(text);
+    long long value = 0;
+    auto [end, error] = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), value);
+    if (error != std::errc{} || end != trimmed.data() + trimmed.size()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
 }  // namespace
 
 PlayerId pick_random_target(const GameView& view, const std::vector<PlayerId>& exclude) {
@@ -51,13 +75,15 @@ PlayerId pick_random_target(const GameView& view, const std::vector<PlayerId>& e
     return candidates[dist(rng())];
 }
 
-PlayerId prompt_for_target(const Player& actor, const GameView& view, const std::vector<PlayerId>& exclude,
-                           std::string_view prompt, std::istream& in, std::ostream& out) {
+Task<PlayerId> prompt_for_target_async(const Player& actor, const GameView& view, std::vector<PlayerId> exclude,
+                                       std::string prompt) {
     std::vector<PlayerId> candidates = gather_candidates(view, exclude);
     if (candidates.empty()) {
-        return kNoTarget;
+        co_return kNoTarget;
     }
 
+    InputBroker& input = *view.input;
+    std::ostream& out = input.out();
     out << "\n[" << actor.name() << "] " << prompt << "\n";
     out << "Доступные игроки:\n";
     for (PlayerId id : candidates) {
@@ -68,51 +94,50 @@ PlayerId prompt_for_target(const Player& actor, const GameView& view, const std:
         out << "Введите id игрока: ";
         out.flush();
 
-        long long choice;
-        if (in >> choice) {
-            PlayerId id = static_cast<PlayerId>(choice);
-            if (std::find(candidates.begin(), candidates.end(), id) != candidates.end()) {
-                return id;
-            }
-            out << "Такого игрока нет среди доступных целей.\n";
-            continue;
+        // Приостановка: пока человек "думает", планировщик успевает выполнить ботов.
+        std::optional<std::string> line = co_await input.read_line();
+        if (!line) {
+            // Поток ввода исчерпан: повторное чтение вернуло бы EOF мгновенно, и
+            // цикл превратился бы в busy-loop. Берём первого кандидата и выходим.
+            out << "Ввод недоступен — выбран первый доступный игрок по умолчанию.\n";
+            co_return candidates.front();
         }
 
-        // Чтение не удалось. Если поток ввода исчерпан (EOF) — это НЕ повод
-        // переспрашивать снова: после eof() следующий in >> choice провалится
-        // мгновенно и без ожидания, так что while(true) превратился бы в
-        // бесконечный busy-loop, а не в ожидание реального ввода. Поэтому при
-        // исчерпанном потоке берём первого доступного кандидата и выходим.
-        if (in.eof()) {
-            out << "Ввод недоступен — выбран первый доступный игрок по умолчанию.\n";
-            return candidates.front();
+        std::optional<long long> number = parse_integer(*line);
+        if (!number) {
+            out << "Некорректный ввод, нужно число.\n";
+            continue;
         }
-        in.clear();
-        in.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-        out << "Некорректный ввод, нужно число.\n";
+        PlayerId id = static_cast<PlayerId>(*number);
+        if (std::find(candidates.begin(), candidates.end(), id) != candidates.end()) {
+            co_return id;
+        }
+        out << "Такого игрока нет среди доступных целей.\n";
     }
 }
 
-bool prompt_yes_no(const Player& actor, std::string_view question, std::string_view yes_word,
-                    std::string_view no_word, bool default_on_eof, std::istream& in, std::ostream& out) {
+Task<bool> prompt_yes_no_async(const Player& actor, const GameView& view, std::string question, std::string yes_word,
+                               std::string no_word, bool default_on_eof) {
+    InputBroker& input = *view.input;
+    std::ostream& out = input.out();
     out << "\n[" << actor.name() << "] " << question << " (" << yes_word << "/" << no_word << "): ";
     out.flush();
 
-    std::string answer;
     while (true) {
-        if (!(in >> answer)) {
-            // Та же защита от busy-loop на исчерпанном потоке, что и в
-            // prompt_for_target выше.
+        std::optional<std::string> line = co_await input.read_line();
+        if (!line) {
             out << "Ввод недоступен — выбран вариант по умолчанию.\n";
-            return default_on_eof;
+            co_return default_on_eof;
         }
+        std::string answer = trim(*line);
         if (answer == yes_word) {
-            return true;
+            co_return true;
         }
         if (answer == no_word) {
-            return false;
+            co_return false;
         }
         out << "Не понял ответ, введите " << yes_word << " или " << no_word << ": ";
+        out.flush();
     }
 }
 

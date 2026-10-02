@@ -35,6 +35,7 @@ struct Config {
     bool open_announcements = false;
     bool full_log = false;
     bool file_log = true;
+    bool coroutines = false;
     std::filesystem::path log_dir = "logs";
 };
 
@@ -50,6 +51,7 @@ void print_usage(const char* program_name) {
         << "                          (по умолчанию — закрытые объявления: только лагерь, без деталей)\n"
         << "  --full-log              выводить подробный внутренний лог раунда (голоса, цели действий)\n"
         << "  --mafia-divisor K       делитель k в формуле floor(N/k) для числа мафии, k >= 3 (по умолчанию 3)\n"
+        << "  --coroutines            исполнять ходы игроков корутинами в одном потоке вместо нитей\n"
         << "  --log-dir DIR           куда писать файловые логи игры (по умолчанию ./logs)\n"
         << "  --no-file-log           не писать файловые логи\n"
         << "  --help                  показать эту подсказку\n\n"
@@ -81,6 +83,8 @@ std::optional<Config> parse_args(int argc, char** argv) {
             config.open_announcements = true;
         } else if (arg == "--full-log") {
             config.full_log = true;
+        } else if (arg == "--coroutines") {
+            config.coroutines = true;
         } else if (arg == "--no-file-log") {
             config.file_log = false;
         } else if (arg == "--log-dir") {
@@ -132,6 +136,8 @@ std::string player_name(const GameMaster& master, PlayerId id) {
 void print_setup(const GameMaster& master, const Config& config, std::optional<PlayerId> human) {
     std::cout << "=== Раздача ролей ===\n";
     std::cout << "Игроков: " << master.all_players().size() << "\n";
+    std::cout << "Ходы игроков исполняются: " << (config.coroutines ? "корутинами (один поток)" : "в отдельных нитях")
+              << "\n";
     if (config.full_log) {
         for (const auto& player : master.all_players()) {
             std::cout << "  " << player->name() << " (id " << player->id() << ") -- "
@@ -395,6 +401,7 @@ int main(int argc, char** argv) {
     }
 
     GameMaster master(config->player_count, config->mafia_divisor);
+    master.set_execution_mode(config->coroutines ? mafia::ExecutionMode::Coroutines : mafia::ExecutionMode::Threads);
 
     std::optional<PlayerId> human;
     if (config->interactive) {

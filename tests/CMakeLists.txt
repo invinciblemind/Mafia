@@ -33,3 +33,8 @@ add_executable(test_concepts test_concepts.cpp)
 target_link_libraries(test_concepts PRIVATE mafia_core)
 
 add_test(NAME ConceptTests COMMAND test_concepts)
+
+add_executable(test_coroutines test_coroutines.cpp)
+target_link_libraries(test_coroutines PRIVATE mafia_core)
+
+add_test(NAME CoroutineTests COMMAND test_coroutines)

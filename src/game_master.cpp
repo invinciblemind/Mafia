@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <map>
+#include <iterator>
 #include <numeric>
 #include <random>
+#include <ranges>
 #include <set>
 #include <string>
 #include <thread>
@@ -137,23 +139,32 @@ std::vector<SharedPtr<Player>> GameMaster::assign_roles(int player_count, int ma
 std::vector<SharedPtr<Player>> GameMaster::alive_players() const {
     std::vector<SharedPtr<Player>> alive;
     alive.reserve(players_.size());
-    for (const auto& player : players_) {
-        if (player->is_alive()) {
-            alive.push_back(player);
-        }
-    }
+    std::ranges::copy(players_ | std::views::filter([](const SharedPtr<Player>& player) { return player->is_alive(); }),
+                      std::back_inserter(alive));
     return alive;
 }
 
 DayReport GameMaster::play_day() {
     ++round_number_;
-    GameView view{alive_players(), round_number_};
+    GameView view{alive_players(), round_number_, &input_};
 
     DayReport report;
     std::map<PlayerId, int> tally;
 
-    std::vector<PlayerId> votes = collect_in_parallel(
-        view.alive_players, [&view](const SharedPtr<Player>& player) { return player->vote(view); });
+    std::vector<PlayerId> votes;
+    if (mode_ == ExecutionMode::Threads) {
+        votes = collect_in_parallel(view.alive_players,
+                                    [&view](const SharedPtr<Player>& player) { return player->vote(view); });
+    } else {
+        // Корутины: по задаче на игрока, всё в этом же потоке. Боты завершаются
+        // сразу, человек приостанавливается на вводе — см. run_all.
+        std::vector<Task<PlayerId>> tasks;
+        tasks.reserve(view.alive_players.size());
+        for (const SharedPtr<Player>& player : view.alive_players) {
+            tasks.push_back(player->vote_async(view));
+        }
+        votes = run_all(std::move(tasks), input_);
+    }
 
     for (std::size_t i = 0; i < view.alive_players.size(); ++i) {
         PlayerId voter = view.alive_players[i]->id();
@@ -165,17 +176,14 @@ DayReport GameMaster::play_day() {
     }
 
     if (!tally.empty()) {
-        int max_votes = 0;
-        for (const auto& [target, count] : tally) {
-            max_votes = std::max(max_votes, count);
-        }
+        // Лидеры голосования: максимум голосов через ranges, затем фильтр по нему.
+        auto votes_of = [](const auto& entry) { return entry.second; };
+        const int max_votes = std::ranges::max(tally | std::views::transform(votes_of));
 
         std::vector<PlayerId> top_candidates;
-        for (const auto& [target, count] : tally) {
-            if (count == max_votes) {
-                top_candidates.push_back(target);
-            }
-        }
+        std::ranges::copy(tally | std::views::filter([max_votes](const auto& entry) { return entry.second == max_votes; }) |
+                              std::views::transform([](const auto& entry) { return entry.first; }),
+                          std::back_inserter(top_candidates));
 
         report.was_tie = top_candidates.size() > 1;
 
@@ -199,13 +207,23 @@ NightReport GameMaster::play_night() {
     // round_number_ НЕ увеличиваем здесь: ночь относится к тому же раунду,
     // что и предшествующий ей день (по правилам день всегда идёт первым;
     // play_day() уже увеличил счётчик раунда перед вызовом play_night()).
-    GameView view{alive_players(), round_number_};
+    GameView view{alive_players(), round_number_, &input_};
 
     NightReport report;
     std::set<PlayerId> kill_targets;
 
-    std::vector<NightAction> actions = collect_in_parallel(
-        view.alive_players, [&view](const SharedPtr<Player>& player) { return player->act(view); });
+    std::vector<NightAction> actions;
+    if (mode_ == ExecutionMode::Threads) {
+        actions = collect_in_parallel(view.alive_players,
+                                      [&view](const SharedPtr<Player>& player) { return player->act(view); });
+    } else {
+        std::vector<Task<NightAction>> tasks;
+        tasks.reserve(view.alive_players.size());
+        for (const SharedPtr<Player>& player : view.alive_players) {
+            tasks.push_back(player->act_async(view));
+        }
+        actions = run_all(std::move(tasks), input_);
+    }
 
     for (std::size_t i = 0; i < view.alive_players.size(); ++i) {
         const SharedPtr<Player>& player = view.alive_players[i];
@@ -271,26 +289,14 @@ RoundReport GameMaster::play_round() {
 }
 
 GameResult GameMaster::check_winner() const {
-    int mafia_alive = 0;
-    int maniac_alive = 0;
-    int town_alive = 0;
-
-    for (const auto& player : players_) {
-        if (!player->is_alive()) {
-            continue;
-        }
-        switch (player->team()) {
-            case Team::Mafia:
-                ++mafia_alive;
-                break;
-            case Team::Independent:
-                ++maniac_alive;  // пока единственная independent-роль — Маньяк
-                break;
-            case Team::Town:
-                ++town_alive;
-                break;
-        }
-    }
+    // Живые игроки каждого лагеря — подсчёт через ranges::count_if.
+    auto alive_in = [this](Team team) {
+        return static_cast<int>(std::ranges::count_if(
+            players_, [team](const SharedPtr<Player>& player) { return player->is_alive() && player->team() == team; }));
+    };
+    const int mafia_alive = alive_in(Team::Mafia);
+    const int maniac_alive = alive_in(Team::Independent);  // пока единственная independent-роль — Маньяк
+    const int town_alive = alive_in(Team::Town);
 
     if (mafia_alive == 0 && maniac_alive == 0) {
         return GameResult::TownWins;

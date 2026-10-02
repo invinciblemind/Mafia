@@ -16,6 +16,11 @@ public:
 
     PlayerId vote(const GameView& view) override;
     NightAction act(const GameView& view) override;
+
+    // Корутинные варианты: у интерактивного игрока приостанавливаются на вводе,
+    // у ботов просто возвращают результат синхронных vote()/act().
+    Task<PlayerId> vote_async(const GameView& view) override;
+    Task<NightAction> act_async(const GameView& view) override;
 };
 
 }  // namespace mafia::roles
