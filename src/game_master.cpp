@@ -6,6 +6,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <thread>
 
 #include "mafia/game_view.hpp"
 #include "mafia/role.hpp"
@@ -27,6 +28,47 @@ namespace {
 std::mt19937& setup_rng() {
     static std::mt19937 engine{std::random_device{}()};
     return engine;
+}
+
+// Запускает decide(player) для каждого живого игрока в ОТДЕЛЬНОЙ std::thread
+// и дожидается всех (join), прежде чем вернуть собранные результаты — п.2
+// задания прямо требует, чтобы ход каждого игрока выполнялся в своей нити.
+//
+// Это безопасно без единого мьютекса, потому что:
+//  - каждая нить пишет в СВОЙ отдельный индекс результирующего вектора
+//    (results[i]), ни один индекс не используется двумя нитями;
+//  - каждая нить вызывает act()/vote() только у СВОЕГО игрока — состояние
+//    вроде last_healed_ у Доктора или checked_ у Комиссара принадлежит
+//    только этому объекту и никогда не трогается другой нитью;
+//  - GameView, который все нити читают параллельно, в этой фазе никем не
+//    изменяется (только читается) — параллельное чтение неизменяемых данных
+//    безопасно само по себе;
+//  - SharedPtr использует атомарный счётчик ссылок (см. mafia/shared_ptr.hpp)
+//    и выдерживает параллельное копирование/уничтожение;
+//  - rng() внутри ролей — thread_local (см. mafia/roles/role_utils.cpp), то
+//    есть у каждой нити свой генератор без общего состояния.
+//
+// Именно эта схема естественно подойдёт и для интерактивного игрока: пока
+// боты почти мгновенно завершают свои нити, нить человека будет блокироваться
+// на ожидании ввода с клавиатуры, а join() ниже просто подождёт её вместе со
+// всеми остальными.
+template <typename Decide>
+auto collect_in_parallel(const std::vector<SharedPtr<Player>>& players, Decide decide)
+    -> std::vector<decltype(decide(players.front()))> {
+    using Result = decltype(decide(players.front()));
+
+    std::vector<Result> results(players.size());
+    std::vector<std::thread> threads;
+    threads.reserve(players.size());
+
+    for (std::size_t i = 0; i < players.size(); ++i) {
+        threads.emplace_back([&players, &decide, &results, i]() { results[i] = decide(players[i]); });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    return results;
 }
 
 }  // namespace
@@ -109,9 +151,13 @@ DayReport GameMaster::play_day() {
     DayReport report;
     std::map<PlayerId, int> tally;
 
-    for (const auto& player : view.alive_players) {
-        PlayerId target = player->vote(view);
-        report.votes.emplace_back(player->id(), target);
+    std::vector<PlayerId> votes = collect_in_parallel(
+        view.alive_players, [&view](const SharedPtr<Player>& player) { return player->vote(view); });
+
+    for (std::size_t i = 0; i < view.alive_players.size(); ++i) {
+        PlayerId voter = view.alive_players[i]->id();
+        PlayerId target = votes[i];
+        report.votes.emplace_back(voter, target);
         if (target != kNoTarget) {
             ++tally[target];
         }
@@ -157,8 +203,12 @@ NightReport GameMaster::play_night() {
     NightReport report;
     std::set<PlayerId> kill_targets;
 
-    for (const auto& player : view.alive_players) {
-        NightAction action = player->act(view);
+    std::vector<NightAction> actions = collect_in_parallel(
+        view.alive_players, [&view](const SharedPtr<Player>& player) { return player->act(view); });
+
+    for (std::size_t i = 0; i < view.alive_players.size(); ++i) {
+        const SharedPtr<Player>& player = view.alive_players[i];
+        const NightAction& action = actions[i];
         switch (action.type) {
             case ActionType::Heal:
                 report.healed = action.target;
