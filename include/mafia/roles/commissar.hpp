@@ -18,7 +18,8 @@ class Commissar : public Player {
 public:
     using Player::Player;
 
-    Role role() const noexcept override { return Role::Commissar; }
+    static constexpr Role kRole = Role::Commissar;
+    Role role() const noexcept override { return kRole; }
 
     PlayerId vote(const GameView& view) override;
     NightAction act(const GameView& view) override;

@@ -12,6 +12,7 @@ find_package(Threads REQUIRED)
 # по два раза и не дублировать список исходников в двух местах.
 add_library(mafia_core
     src/game_master.cpp
+    src/game_logger.cpp
     src/roles/role_utils.cpp
     src/roles/civilian.cpp
     src/roles/doctor.cpp

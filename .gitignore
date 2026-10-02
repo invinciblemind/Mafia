@@ -3,3 +3,4 @@ cmake-build-*/
 *.o
 *.dSYM/
 .DS_Store
+logs/

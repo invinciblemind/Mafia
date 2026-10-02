@@ -23,3 +23,13 @@ add_executable(test_interactive test_interactive.cpp)
 target_link_libraries(test_interactive PRIVATE mafia_core)
 
 add_test(NAME InteractiveTests COMMAND test_interactive)
+
+add_executable(test_game_logger test_game_logger.cpp)
+target_link_libraries(test_game_logger PRIVATE mafia_core)
+
+add_test(NAME GameLoggerTests COMMAND test_game_logger)
+
+add_executable(test_concepts test_concepts.cpp)
+target_link_libraries(test_concepts PRIVATE mafia_core)
+
+add_test(NAME ConceptTests COMMAND test_concepts)

@@ -10,7 +10,9 @@ class Civilian : public Player {
 public:
     using Player::Player;  // наследуем конструктор Player(id, name)
 
-    Role role() const noexcept override { return Role::Civilian; }
+    // Роль известна при компиляции — на это опираются концепты (concepts.hpp).
+    static constexpr Role kRole = Role::Civilian;
+    Role role() const noexcept override { return kRole; }
 
     PlayerId vote(const GameView& view) override;
     NightAction act(const GameView& view) override;

@@ -20,10 +20,15 @@ public:
     Mafia(PlayerId id, std::string name, SharedPtr<MafiaCouncil> council)
         : Player(id, std::move(name)), council_(std::move(council)) {}
 
-    Role role() const noexcept override { return Role::Mafia; }
+    static constexpr Role kRole = Role::Mafia;
+    Role role() const noexcept override { return kRole; }
 
     PlayerId vote(const GameView& view) override;
     NightAction act(const GameView& view) override;
+
+    // Общий стол банды: через него Ведущий (main) узнаёт состав команды и
+    // текущего Босса, чтобы рассказать об этом игроку-человеку.
+    const SharedPtr<MafiaCouncil>& council() const noexcept { return council_; }
 
 private:
     SharedPtr<MafiaCouncil> council_;

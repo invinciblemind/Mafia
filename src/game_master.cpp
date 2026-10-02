@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 
+#include "mafia/concepts.hpp"
 #include "mafia/game_view.hpp"
 #include "mafia/role.hpp"
 #include "mafia/roles/civilian.hpp"
@@ -111,23 +112,23 @@ std::vector<SharedPtr<Player>> GameMaster::assign_roles(int player_count, int ma
     std::size_t cursor = 0;
     for (int i = 0; i < mafia_count; ++i, ++cursor) {
         PlayerId id = ids[cursor];
-        players[id] = make_shared_ptr<roles::Mafia>(id, name_for(id), council);
+        players[id] = make_player<roles::Mafia>(id, name_for(id), council);
     }
     {
         PlayerId id = ids[cursor++];
-        players[id] = make_shared_ptr<roles::Doctor>(id, name_for(id));
+        players[id] = make_player<roles::Doctor>(id, name_for(id));
     }
     {
         PlayerId id = ids[cursor++];
-        players[id] = make_shared_ptr<roles::Commissar>(id, name_for(id));
+        players[id] = make_player<roles::Commissar>(id, name_for(id));
     }
     {
         PlayerId id = ids[cursor++];
-        players[id] = make_shared_ptr<roles::Maniac>(id, name_for(id));
+        players[id] = make_player<roles::Maniac>(id, name_for(id));
     }
     for (; cursor < ids.size(); ++cursor) {
         PlayerId id = ids[cursor];
-        players[id] = make_shared_ptr<roles::Civilian>(id, name_for(id));
+        players[id] = make_player<roles::Civilian>(id, name_for(id));
     }
 
     return players;

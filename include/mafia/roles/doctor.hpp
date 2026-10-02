@@ -11,7 +11,8 @@ class Doctor : public Player {
 public:
     using Player::Player;
 
-    Role role() const noexcept override { return Role::Doctor; }
+    static constexpr Role kRole = Role::Doctor;
+    Role role() const noexcept override { return kRole; }
 
     PlayerId vote(const GameView& view) override;
     NightAction act(const GameView& view) override;
